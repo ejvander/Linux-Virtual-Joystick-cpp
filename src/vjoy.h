@@ -21,10 +21,8 @@ private:
 	std::string problem;
 
 public:
-	bool fatal;
-
-	error(const std::string& message, bool terminate = false) throw () :
-			problem(message), fatal(terminate) {
+	error(const std::string& message) throw () :
+			problem(message) {
 	}
 
 	virtual ~error() throw () {

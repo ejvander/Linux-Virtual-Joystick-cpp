@@ -33,7 +33,7 @@ public:
 	static device* dev;
 
 	enum dev_state {
-		LIVE = 0, TO_STALL, STALLED
+		UNINITIALIZED = 0, LIVE, TO_STALL, STALLED
 	};
 
 	char* devPath;
@@ -43,11 +43,11 @@ public:
 	PyObject* pymodule; // The Python script that operates this device
 	vjoy_info devinfo; // The parsed device info
 
-	pthread_t eventThread; // pthread structure for events
 	pthread_t inputThread; // pthread for device input loop
 
 	std::string name; //sadly this is a duplicate
 	int delay; //milliseconds
+	bool enableFF; //use force feedback
 
 	//this is called from inputLoop
 	dev_state getState() {
@@ -68,7 +68,7 @@ public:
 		if (freq == 0) freq = DEFUALT_INPUT_RATE;
 		delay = 1000000 / freq;
 
-		currentStatus = LIVE;
+		currentStatus = UNINITIALIZED;
 
 		pause_callback = NULL;
 		resume_callback = NULL;
@@ -101,15 +101,13 @@ private:
 	PyObject* resume_callback;
 	PyObject* kill_callback;
 
-	//threads
-	static void* eventLoop(void* arg);
+	//thread
 	static void* inputLoop(void* arg);
 
 	void killEventLoop();
 	void killInputLoop();
 
 	static pthread_mutex_t devMutex; //this is for indirectly communicating with the main loop
-
 
 	static PyObject* moduleKillSelf(PyObject* self, PyObject* args); //this is a python callback
 

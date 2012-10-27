@@ -12,14 +12,16 @@ using namespace std;
 
 void console() {
 	const char* commandIndicator = " # ";
-	cout << commandIndicator;
-
 	char line[2048];
 
+	cout << "commands: pause, resume, kill" << endl;
+
 	while (true) {
+		cout << commandIndicator;
 		cin.getline(line, 2048);
 
 		char* cmd = strtok(line, " ");
+		if (!cmd) continue;
 
 		if (strcmp(cmd, "exit") == 0) {
 			device::dev->kill();
@@ -46,6 +48,12 @@ void console() {
 			device::dev->resume();
 		}
 
-		cout << "unknown command" << endl;
+		else if (strcmp(cmd, "kill") == 0){
+			device::dev->kill();
+			cout << "killed" << endl;
+			return;
+		}
+
+		else cout << "unknown command" << endl;
 	}
 }

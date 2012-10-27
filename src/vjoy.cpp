@@ -26,9 +26,12 @@ using namespace std;
 //global
 pthread_mutex_t vjoy::pymutex;
 
-void* device::eventLoop(void* arg) {
+//this thread is a 'server' it processes events coming from applications, such as force feedback
+//this thread processes input coming from the python script, possibly relayed from external hardware
+void* device::inputLoop(void* arg) {
 	device* dev = (device*) arg;
 
+	//feedback from uinput
 	input_event evt;
 	uinput_ff_upload ureq;
 	uinput_ff_erase ereq;
@@ -36,110 +39,100 @@ void* device::eventLoop(void* arg) {
 	PyObject* res;
 	PyObject* pyeffect;
 
-	while (true) {
-		if (dev->getState() == TO_STALL) pthread_exit(NULL);
-		//cout << "Waiting for events." << endl;
-		//this is a blocking read and it is where the thread spends most of its time
-		int s = read(dev->uifd, &evt, sizeof(input_event));
-		if (dev->getState() == TO_STALL) pthread_exit(NULL); //the signal might come during the read
-
-		if (s == -1) {
-			cerr << "errno is " << errno << endl;
-		}
-		else if (s != sizeof(input_event)) {
-			cerr << "module " << dev->name << ": Error reading event structure (read " << s << " bytes)" << endl;
-			continue;
-		}
-
-		//this must stay c style due to formatting
-		printf("Event recieved.\n\tType: %x\n\tCode: %x\n\tValue: %x\n", evt.type, evt.code, evt.value);
-
-		switch (evt.type) {
-
-		case EV_UINPUT:
-			switch (evt.code) {
-
-			case UI_FF_UPLOAD:
-				memset(&ureq, 0, sizeof(struct uinput_ff_upload));
-				ureq.request_id = evt.value;
-				ioctl(dev->uifd, UI_BEGIN_FF_UPLOAD, &ureq);
-
-				pthread_mutex_lock(&vjoy::pymutex);
-				pyeffect = convert_ff_effect(&ureq.effect);
-
-				res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyUploadFeedback"), const_cast<char*>("O"), pyeffect);
-				Py_XDECREF(res);
-
-				if (PyErr_Occurred()) {
-					//console::store();
-					PyErr_Print();
-					//console::restore();
-				}
-
-				pthread_mutex_unlock(&vjoy::pymutex);
-				ioctl(dev->uifd, UI_END_FF_UPLOAD, &ureq);
-				break;
-
-			case UI_FF_ERASE:
-				memset(&ereq, 0, sizeof(struct uinput_ff_erase));
-				ereq.request_id = evt.value;
-				ioctl(dev->uifd, UI_BEGIN_FF_ERASE, &ereq);
-
-				pthread_mutex_lock(&vjoy::pymutex);
-
-				res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyEraseFeedback"), const_cast<char*>("i"), ereq.effect_id);
-				Py_XDECREF(res);
-
-				if (PyErr_Occurred()) {
-					//console::store();
-					PyErr_Print();
-					//console::restore();
-				}
-
-				pthread_mutex_unlock(&vjoy::pymutex);
-				ioctl(dev->uifd, UI_END_FF_ERASE, &ereq);
-				break;
-
-			default:
-				break;
-			}
-
-			break;
-
-		default:
-			pthread_mutex_lock(&vjoy::pymutex);
-
-			res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyEvent"), const_cast<char*>("iii"), evt.type, evt.code, evt.value);
-			Py_XDECREF(res);
-
-			if (PyErr_Occurred()) {
-				//console::store();
-				PyErr_Print();
-				//console::restore();
-			}
-
-			pthread_mutex_unlock(&vjoy::pymutex);
-			break;
-		}
-	}
-}
-
-void* device::inputLoop(void* arg) {
-	device* dev = (device*) arg;
-
+	//events from hardware - send to uinput
 	PyObject* pyevents;
-	input_event evt;
 
 	while (true) {
 		if (dev->getState() == TO_STALL) pthread_exit(NULL);
 
+		if (dev->enableFF) {
+			//non-blocking
+			int s = read(dev->uifd, &evt, sizeof(input_event));
+
+			//error
+			if (s == -1) {
+				if (errno != EAGAIN) {
+					cerr << "could not read device file; errno is " << errno << " - " << strerror(errno) << endl;
+					ioctl(dev->uifd, UI_DEV_DESTROY);
+					pthread_exit(NULL);
+				}
+			}
+
+			else {
+				cout << "ff " << s << endl;
+				//process events
+				switch (evt.type) {
+
+				case EV_UINPUT:
+					switch (evt.code) {
+
+					case UI_FF_UPLOAD:
+						memset(&ureq, 0, sizeof(struct uinput_ff_upload));
+						ureq.request_id = evt.value;
+						ioctl(dev->uifd, UI_BEGIN_FF_UPLOAD, &ureq);
+
+						pthread_mutex_lock(&vjoy::pymutex);
+						pyeffect = convert_ff_effect(&ureq.effect);
+						res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyUploadFeedback"), const_cast<char*>("O"), pyeffect);
+						Py_XDECREF(res);
+
+						if (PyErr_Occurred()) {
+							PyErr_Print();
+						}
+						pthread_mutex_unlock(&vjoy::pymutex);
+
+						ioctl(dev->uifd, UI_END_FF_UPLOAD, &ureq);
+						break;
+
+					case UI_FF_ERASE:
+						memset(&ereq, 0, sizeof(struct uinput_ff_erase));
+						ereq.request_id = evt.value;
+						ioctl(dev->uifd, UI_BEGIN_FF_ERASE, &ereq);
+
+						pthread_mutex_lock(&vjoy::pymutex);
+						res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyEraseFeedback"), const_cast<char*>("i"), ereq.effect_id);
+						Py_XDECREF(res);
+
+						if (PyErr_Occurred()) {
+							PyErr_Print();
+						}
+						pthread_mutex_unlock(&vjoy::pymutex);
+
+						ioctl(dev->uifd, UI_END_FF_ERASE, &ereq);
+						break;
+
+					default:
+						break;
+					}
+
+					break;
+
+				default:
+					//the event can't be handled, so sent it to the python script
+					pthread_mutex_lock(&vjoy::pymutex);
+
+					res = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyEvent"), const_cast<char*>("iii"), evt.type, evt.code, evt.value);
+					Py_XDECREF(res);
+
+					if (PyErr_Occurred()) {
+						PyErr_Print();
+					}
+
+					pthread_mutex_unlock(&vjoy::pymutex);
+					break;
+				}
+			}
+		}
+
+		//events
 		pthread_mutex_lock(&vjoy::pymutex);
 		pyevents = PyObject_CallMethod(dev->pymodule, const_cast<char*>("doVJoyThink"), NULL);
 
 		if (PyErr_Occurred()) {
-			//console::store();
 			PyErr_Print();
-			//console::restore();
+			cout << "python error in thread execution" << endl;
+			ioctl(dev->uifd, UI_DEV_DESTROY);
+			pthread_exit(NULL);
 		}
 
 		if (pyevents) {
@@ -151,7 +144,7 @@ void* device::inputLoop(void* arg) {
 
 				// TODO: This all needs more error checking
 				for (int i = 0; i < eventcount; i++) {
-					PyObject *pyevent = PySequence_GetItem(pyevents, i);
+					PyObject* pyevent = PySequence_GetItem(pyevents, i);
 
 					if (pyevent) {
 						if (PySequence_Size(pyevent) != 3) {
@@ -159,19 +152,19 @@ void* device::inputLoop(void* arg) {
 							continue;
 						}
 
-						PyObject *pytype = PySequence_GetItem(pyevent, 0);
+						PyObject* pytype = PySequence_GetItem(pyevent, 0);
 						if (pytype) {
 							evt.type = PyLong_AsLong(pytype);
 							Py_DECREF(pytype);
 						}
 
-						PyObject *pycode = PySequence_GetItem(pyevent, 1);
+						PyObject* pycode = PySequence_GetItem(pyevent, 1);
 						if (pycode) {
 							evt.code = PyLong_AsLong(pycode);
 							Py_DECREF(pycode);
 						}
 
-						PyObject *pyvalue = PySequence_GetItem(pyevent, 2);
+						PyObject* pyvalue = PySequence_GetItem(pyevent, 2);
 						if (pyvalue) {
 							evt.value = PyLong_AsLong(pyvalue);
 							Py_DECREF(pyvalue);
@@ -197,7 +190,7 @@ void* device::inputLoop(void* arg) {
 	}
 }
 
-PyObject* convert_ff_envelope(struct ff_envelope *envelope) {
+PyObject* convert_ff_envelope(struct ff_envelope* envelope) {
 	PyObject* pyenvelope = PyDict_New();
 	PyDict_SetItemString(pyenvelope, "attack_length", PyLong_FromLong(envelope->attack_length));
 	PyDict_SetItemString(pyenvelope, "attack_level", PyLong_FromLong(envelope->attack_level));
@@ -207,7 +200,7 @@ PyObject* convert_ff_envelope(struct ff_envelope *envelope) {
 	return pyenvelope;
 }
 
-PyObject* convert_ff_effect(struct ff_effect *effect) {
+PyObject* convert_ff_effect(struct ff_effect* effect) {
 	PyObject* pyeffect = PyDict_New();
 	PyDict_SetItemString(pyeffect, "type", PyLong_FromLong(effect->type));
 	PyDict_SetItemString(pyeffect, "id", PyLong_FromLong(effect->id));
@@ -298,9 +291,10 @@ void vjoy::init() {
 	Py_Initialize();
 	if (PyErr_Occurred()) {
 		PyErr_Print();
+		throw(error("could not initialize python"));
 	}
 
-	if (pthread_mutex_init(&vjoy::pymutex, NULL) != 0) throw(error("mutex initialization failed", true));
+	if (pthread_mutex_init(&vjoy::pymutex, NULL)) throw(error("mutex initialization failed"));
 
 	cout << endl;
 	cout << "looking for the modules in: " << endl;
@@ -329,25 +323,15 @@ void vjoy::init() {
 	PySys_SetPath(path.str().c_str());
 #else
 
-	stringstream path;
-
 	char cwd[FILENAME_MAX];
 	getcwd(cwd, FILENAME_MAX);
 
-	path << Py_GetPath() << ":" << getenv("HOME") << ":" << cwd << ":/usr/lib/share/pyshared";
+	PyObject* sysModule = PyImport_ImportModule("sys");
+	PyObject* pyPath = PyObject_GetAttrString(sysModule, "path");
 
-	string _p = path.str();
-	size_t f = 0;
-	size_t last = 0;
-
-	while (f != string::npos) {
-		last = f;
-		f = _p.find(":", f + 1);
-		if (last == 0) cout << "\t" << _p.substr(last, f - last - 1) << endl;
-		else cout << "\t" << _p.substr(last + 1, f - last - 1) << endl;
-	}
-
-	PySys_SetPath(const_cast<char*>(path.str().c_str()));
+	PyList_Append(pyPath, PyString_FromString("."));
+	if (getenv("HOME")) PyList_Append(pyPath, PyString_FromString(getenv("HOME")));
+	PyList_Append(pyPath, PyString_FromString(cwd));
 
 #endif
 

@@ -8,10 +8,26 @@ using namespace std;
 //console.cpp
 void console();
 
+//universal signal handler for all varieties of kill signals
+void killSignalHandler(int signum) {
+	if (device::dev->getState() != device::UNINITIALIZED) {
+		device::dev->kill();
+	}
+}
+
 int main(int argc, char** argv) {
 	if (argc < 2) cout << "usage: vjoy <device.py> [polling frequency in Hz]" << endl;
 
 	else try {
+		//catch every possible signal, due to the nasty consequences
+		//of the process being terminated but the device not being destroyed
+		signal(SIGINT, killSignalHandler);
+		signal(SIGQUIT, killSignalHandler);
+		signal(SIGILL, killSignalHandler);
+		signal(SIGKILL, killSignalHandler);
+		signal(SIGTERM, killSignalHandler);
+
+
 		vjoy::init();
 
 		bool addModules = true;
@@ -46,16 +62,13 @@ int main(int argc, char** argv) {
 		}
 
 		catch (error& e) {
-			if (!e.fatal) {
-				cerr << "could not load module " << endl;
-				delete device::dev;
-				return EXIT_FAILURE;
-			}
+			cerr << "could not load module " << endl;
+			delete device::dev;
+			return EXIT_FAILURE;
 
-			else throw(e);
 		}
 
-		sleep(2); //wait a bit till the module is loaded
+		sleep(1); //wait a bit till the module gets loaded
 		console();
 	}
 

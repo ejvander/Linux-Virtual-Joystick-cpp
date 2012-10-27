@@ -99,6 +99,13 @@ void device::parseInfo() {
 		Py_DECREF(pymaxeffects);
 	}
 
+	PyObject* pyEnableFF = PyMapping_GetItemString(pyinfo, const_cast<char*>("enable_ff"));
+
+	if (pyEnableFF){
+		enableFF = PyObject_IsTrue(pyEnableFF);
+		Py_DECREF(pyEnableFF);
+	}
+
 	// Buttons and keys
 	vjoy_parse_block(pyinfo, const_cast<char*>("buttons"), &devinfo.buttoncount, devinfo.buttons, KEY_CNT);
 
@@ -109,7 +116,7 @@ void device::parseInfo() {
 
 void device::load() {
 	// Create device
-	cout << "Initializing device: " << name << endl;
+	cout << "Initializing device: " << name << ", updated every " << delay / 1000 << " milliseconds" << endl;
 
 	// Start up Python
 	cout << "\tImporting python module." << endl << endl;
@@ -137,7 +144,7 @@ void device::load() {
 
 	PyObject* killFunction = PyCFunction_New(&killMethodDef, NULL);
 	PyMethod_New(killFunction, NULL, pymodule);
-	Py_DECREF(killFunction);
+	//Py_DECREF(killFunction);
 
 	pthread_mutex_unlock(&vjoy::pymutex);
 
@@ -151,19 +158,19 @@ void device::load() {
 
 	if (!_udev) {
 		cerr << "errno " << errno << " - " << strerror(errno) << endl;
-		throw(error("could create a udev", true));
+		throw(error("could create a udev"));
 	}
 
 	udev_dev = udev_device_new_from_subsystem_sysname(_udev, "misc", "uinput");
 	if (!udev_dev) {
 		cerr << "errno " << errno << " - " << strerror(errno) << endl;
-		throw(error("could create a udev_device", true));
+		throw(error("could create a udev_device"));
 	}
 
 	devnode = udev_device_get_devnode(udev_dev);
 	if (!devnode) {
 		cerr << "errno " << errno << " - " << strerror(errno) << endl;
-		throw(error("could not get devnoce from udev_dev", true));
+		throw(error("could not get devnoce from udev_dev"));
 	}
 
 	devPath = (char*) malloc(strlen(devnode) + 1);
@@ -176,8 +183,12 @@ void device::load() {
 	//open the device file
 	cout << "\tInitializing UInput" << endl;
 
-	uifd = open(devPath, O_RDWR);
-	if (uifd == -1) cerr << "errno " << errno << " - " << strerror(errno) << endl;
+	//this read is non-blocking
+	uifd = open(devPath, O_RDWR | O_NONBLOCK);
+	if (uifd == -1) {
+		cerr << "errno " << errno << " - " << strerror(errno) << endl;
+		throw(error("could not open uinput file"));
+	}
 
 	cout << "\t\tSuccess! (file descriptor is " << uifd << ")" << endl << endl;
 
@@ -225,17 +236,18 @@ void device::load() {
 	int w = write(uifd, &uidev, size);
 
 	//TOOD:this part fails in ubuntu 12.04. find a solution
+	//but it works in ubuntu 12.10
 	if (w != sizeof(uinput_user_dev)) {
 		cerr << "errno " << errno << " - " << strerror(errno) << endl;
 		cerr << "(written " << w << " bytes)" << endl;
-		throw(error("could not write device info", true));
+		throw(error("could not write device info"));
 	}
 
 	errno = 0;
 
 	if (ioctl(uifd, UI_DEV_CREATE) != 0) {
 		cerr << "errno " << errno << " - " << strerror(errno) << endl;
-		throw(error("could not register device", true));
+		throw(error("could not register device"));
 	}
 
 	cout << "\tDevice created." << endl;
@@ -265,12 +277,18 @@ void device::kill() {
 	Py_DECREF(pymodule);
 	pthread_mutex_unlock(&vjoy::pymutex);
 
+	if (ioctl(uifd, UI_DEV_DESTROY) != 0) {
+		//this really should never happen, since it would cause the process the stall indefinitely and make it 'immortal'
+		//and possible prevent uinput from working until a reboot
+		cerr << "errno " << errno << " - " << strerror(errno) << endl;
+		throw(error("could not unregister device"));
+	}
 	close(uifd);
 }
 
 void device::pause() {
+	setState(TO_STALL);
 	pthread_join(inputThread, NULL);
-	pthread_join(eventThread, NULL);
 
 	setState(STALLED);
 }
@@ -280,6 +298,5 @@ void device::resume() {
 	currentStatus = LIVE;
 
 	pthread_create(&inputThread, NULL, device::inputLoop, this);
-	pthread_create(&eventThread, NULL, device::eventLoop, this);
 }
 
