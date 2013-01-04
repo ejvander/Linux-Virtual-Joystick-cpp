@@ -1,4 +1,4 @@
-import vjoy # this module is only available through vjoy
+import vjoy # this module is hosted by the program
 import math
 
 # This function returns essential joystick information
@@ -9,13 +9,15 @@ def getVJoyInfo():
 		'absaxis':    [vjoy.ABS_X, vjoy.ABS_Y], # List of absolute axises to use
 		'feedback':   [vjoy.FF_RUMBLE], 	# List of force feedback types to support
 		'maxeffects': 0, 			# Maximum number of concurrent feedback effects 
-		'buttons':    []  			# List of buttons to use
+		'buttons':    [],  			# List of buttons to use
 		'enable_ff': False			# Whether to enable for feedback
 	}
 
 # The "think" routine runs every few milliseconds.  Do NOT perform
 # blocking operations within this function.  Doing so will prevent other
 # important stuff from happening.
+
+# The range of axes is signed short: [-32768, 32767]
 
 theta = 0.0
 way = True
