@@ -1,9 +1,6 @@
-try:
-  import vjoy # this module is hosted by the program
-  import time
-  import math
-except ImportError:
-  print "what?"
+import vjoy # this module is hosted by the program
+import time
+import math
 
 # This function returns essential joystick information
 def getVJoyInfo():
